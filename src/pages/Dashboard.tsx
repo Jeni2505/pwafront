@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, setAuth } from "../api";
 import {
   cacheTasks,
@@ -13,20 +14,18 @@ import { syncNow, setupOnlineSync } from "../offline/sync";
 type Status = "Pendiente" | "En Progreso" | "Completada";
 
 type Task = {
-  _id: string;                 // serverId o clienteId (offline)
+  _id: string;
   title: string;
   description?: string;
   status: Status;
   clienteId?: string;
   createdAt?: string;
   deleted?: boolean;
-  pending?: boolean;           // <- muestra “Falta sincronizar”
+  pending?: boolean;
 };
 
-// id local (no 24 hex de Mongo)
 const isLocalId = (id: string) => !/^[a-f0-9]{24}$/i.test(id);
 
-// Normaliza lo que venga del backend
 function normalizeTask(x: any): Task {
   return {
     _id: String(x?._id ?? x?.id),
@@ -46,6 +45,7 @@ function normalizeTask(x: any): Task {
 }
 
 export default function Dashboard() {
+  const nav = useNavigate();
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [title, setTitle] = useState("");
@@ -56,14 +56,38 @@ export default function Dashboard() {
   const [editingTitle, setEditingTitle] = useState("");
   const [editingDescription, setEditingDescription] = useState("");
   const [online, setOnline] = useState<boolean>(navigator.onLine);
+  const [userRole, setUserRole] = useState<"USER" | "ADMIN" | null>(null);
+
+  // ── Heartbeat: notifica al servidor que el usuario sigue activo ──────────
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function startHeartbeat() {
+    // Envía inmediatamente y luego cada 30 segundos
+    const send = () => {
+      if (navigator.onLine) api.post("/admin/heartbeat").catch(() => {});
+    };
+    send();
+    heartbeatRef.current = setInterval(send, 30_000);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+  }
+  // ─────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     setAuth(localStorage.getItem("token"));
 
-    // Suscripción que dispara sync al volver online (definida en offline/sync)
+    // Obtener perfil para saber el rol
+    api.get("/auth/profile")
+      .then(({ data }) => setUserRole(data?.user?.role ?? "USER"))
+      .catch(() => setUserRole("USER"));
+
+    // Iniciar heartbeat
+    startHeartbeat();
+
     const unsubscribe = setupOnlineSync();
 
-    // Handlers de estado (sin recargar)
     const on = async () => {
       setOnline(true);
       await syncNow();
@@ -74,21 +98,15 @@ export default function Dashboard() {
     window.addEventListener("offline", off);
 
     (async () => {
-      // 1) Mostrar cache local primero
       const local = await getAllTasksLocal();
       if (local?.length) setTasks(local.map(normalizeTask));
-
-      // 2) Intentar traer del server
       await loadFromServer();
-
-      // 3) Intentar sincronizar pendientes
       await syncNow();
-
-      // 4) Re-cargar del server por si hubo mapeos nuevos
       await loadFromServer();
     })();
 
     return () => {
+      stopHeartbeat();
       unsubscribe?.();
       window.removeEventListener("online", on);
       window.removeEventListener("offline", off);
@@ -97,7 +115,7 @@ export default function Dashboard() {
 
   async function loadFromServer() {
     try {
-      const { data } = await api.get("/tasks"); // { items: [...] }
+      const { data } = await api.get("/tasks");
       const raw = Array.isArray(data?.items) ? data.items : [];
       const list = raw.map(normalizeTask);
       setTasks(list);
@@ -115,14 +133,13 @@ export default function Dashboard() {
     const d = description.trim();
     if (!t) return;
 
-    // Crear local inmediatamente
     const clienteId = crypto.randomUUID();
     const localTask = normalizeTask({
       _id: clienteId,
       title: t,
       description: d,
       status: "Pendiente" as Status,
-      pending: !navigator.onLine, // <- marca “Falta sincronizar” si no hay red
+      pending: !navigator.onLine,
     });
 
     setTasks((prev) => [localTask, ...prev]);
@@ -142,14 +159,12 @@ export default function Dashboard() {
       return;
     }
 
-    // Online directo
     try {
       const { data } = await api.post("/tasks", { title: t, description: d });
       const created = normalizeTask(data?.task ?? data);
       setTasks((prev) => prev.map((x) => (x._id === clienteId ? created : x)));
       await putTaskLocal(created);
     } catch {
-      // si falla, encola
       const op: OutboxOp = {
         id: "op-" + clienteId,
         op: "create",
@@ -169,7 +184,7 @@ export default function Dashboard() {
 
   async function saveEdit(taskId: string) {
     const newTitle = editingTitle.trim();
-    const newDesc  = editingDescription.trim();
+    const newDesc = editingDescription.trim();
     if (!newTitle) return;
 
     const before = tasks.find((t) => t._id === taskId);
@@ -240,24 +255,36 @@ export default function Dashboard() {
     await removeTaskLocal(taskId);
 
     if (!navigator.onLine) {
-      await queue({ id: "del-" + taskId, op: "delete", serverId: isLocalId(taskId) ? undefined : taskId, clienteId: isLocalId(taskId) ? taskId : undefined, ts: Date.now() });
+      await queue({
+        id: "del-" + taskId,
+        op: "delete",
+        serverId: isLocalId(taskId) ? undefined : taskId,
+        clienteId: isLocalId(taskId) ? taskId : undefined,
+        ts: Date.now(),
+      });
       return;
     }
 
     try {
       await api.delete(`/tasks/${taskId}`);
     } catch {
-      // rollback + encola
       setTasks(backup);
       for (const t of backup) await putTaskLocal(t);
-      await queue({ id: "del-" + taskId, op: "delete", serverId: taskId, clienteId: isLocalId(taskId) ? taskId : undefined, ts: Date.now() });
+      await queue({
+        id: "del-" + taskId,
+        op: "delete",
+        serverId: taskId,
+        clienteId: isLocalId(taskId) ? taskId : undefined,
+        ts: Date.now(),
+      });
     }
   }
 
   function logout() {
+    stopHeartbeat();
     localStorage.removeItem("token");
     setAuth(null);
-    window.location.href = "/"; // login
+    window.location.href = "/";
   }
 
   const filtered = useMemo(() => {
@@ -290,11 +317,37 @@ export default function Dashboard() {
           <span>Total: {stats.total}</span>
           <span>Hechas: {stats.done}</span>
           <span>Pendientes: {stats.pending}</span>
-          <span className="badge" style={{ marginLeft: 8, background: online ? "#1f6feb" : "#b45309" }}>
+          <span
+            className="badge"
+            style={{
+              marginLeft: 8,
+              background: online ? "#1f6feb" : "#b45309",
+            }}
+          >
             {online ? "Online" : "Offline"}
           </span>
         </div>
-        <button className="btn danger" onClick={logout}>Salir</button>
+
+        {/* Botón solo visible para ADMIN */}
+        {userRole === "ADMIN" && (
+          <button
+            className="btn"
+            style={{
+              background: "#1d4ed8",
+              marginRight: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+            onClick={() => nav("/admin")}
+          >
+            👥 Admin
+          </button>
+        )}
+
+        <button className="btn danger" onClick={logout}>
+          Salir
+        </button>
       </header>
 
       <main>
@@ -355,11 +408,15 @@ export default function Dashboard() {
         ) : (
           <ul className="list">
             {filtered.map((t) => (
-              <li key={t._id} className={t.status === "Completada" ? "item done" : "item"}>
-                {/* Select de estado */}
+              <li
+                key={t._id}
+                className={t.status === "Completada" ? "item done" : "item"}
+              >
                 <select
                   value={t.status}
-                  onChange={(e) => handleStatusChange(t, e.target.value as Status)}
+                  onChange={(e) =>
+                    handleStatusChange(t, e.target.value as Status)
+                  }
                   className="status-select"
                   title="Estado"
                 >
@@ -381,22 +438,32 @@ export default function Dashboard() {
                       <textarea
                         className="edit"
                         value={editingDescription}
-                        onChange={(e) => setEditingDescription(e.target.value)}
+                        onChange={(e) =>
+                          setEditingDescription(e.target.value)
+                        }
                         placeholder="Descripción"
                         rows={2}
                       />
                     </>
                   ) : (
                     <>
-                      <span className="title" onDoubleClick={() => startEdit(t)}>
+                      <span
+                        className="title"
+                        onDoubleClick={() => startEdit(t)}
+                      >
                         {t.title}
                       </span>
-                      {t.description && <p className="desc">{t.description}</p>}
+                      {t.description && (
+                        <p className="desc">{t.description}</p>
+                      )}
                       {(t.pending || isLocalId(t._id)) && (
                         <span
                           className="badge"
                           title="Aún no sincronizada"
-                          style={{ background: "#b45309", width: "fit-content" }}
+                          style={{
+                            background: "#b45309",
+                            width: "fit-content",
+                          }}
                         >
                           Falta sincronizar
                         </span>
@@ -407,11 +474,26 @@ export default function Dashboard() {
 
                 <div className="actions">
                   {editingId === t._id ? (
-                    <button className="btn" onClick={() => saveEdit(t._id)}>Guardar</button>
+                    <button
+                      className="btn"
+                      onClick={() => saveEdit(t._id)}
+                    >
+                      Guardar
+                    </button>
                   ) : (
-                    <button className="icon" title="Editar" onClick={() => startEdit(t)}>✏️</button>
+                    <button
+                      className="icon"
+                      title="Editar"
+                      onClick={() => startEdit(t)}
+                    >
+                      ✏️
+                    </button>
                   )}
-                  <button className="icon danger" title="Eliminar" onClick={() => removeTask(t._id)}>
+                  <button
+                    className="icon danger"
+                    title="Eliminar"
+                    onClick={() => removeTask(t._id)}
+                  >
                     🗑️
                   </button>
                 </div>
