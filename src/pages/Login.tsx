@@ -18,6 +18,8 @@ export default function Login() {
     try {
       const { data } = await api.post("/auth/login", { email, password });
       localStorage.setItem("token", data.token);
+      // Guardar el rol para que Dashboard lo lea sin hacer otra petición
+      localStorage.setItem("userRole", data.user?.role ?? "USER");
       setAuth(data.token);
       nav("/dashboard");
     } catch (err: any) {
@@ -31,9 +33,9 @@ export default function Login() {
     <div className="auth-wrap">
       <div className="card">
         <div className="brand">
-            <img src={logo} alt="To-Do PWA" className="logo-img" />
-            <h2>To-Do PWA</h2>
-            <p className="muted">Bienvenido, inicia sesión para continuar</p>
+          <img src={logo} alt="To-Do PWA" className="logo-img" />
+          <h2>To-Do PWA</h2>
+          <p className="muted">Bienvenido, inicia sesión para continuar</p>
         </div>
 
         <form className="form" onSubmit={onSubmit}>
