@@ -32,17 +32,15 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const url: string = error.config?.url ?? "";
 
-    const isAdminRoute = url.includes("/admin/") || url.includes("/admin");
+    const isAdminRoute = url.includes("/admin/");
     const isProfileRoute = url.includes("/auth/profile");
 
-    console.log("⚠️ Error en petición:", url, "status:", status, "isAdmin:", isAdminRoute);
-
-    // Si es 401 y NO es ruta admin ni profile → cerrar sesión
+    // 🔥 Si es 401 y NO es ruta admin ni profile → cerrar sesión
     if (status === 401 && !isAdminRoute && !isProfileRoute) {
-      console.log("🔴 LOGOUT por 401 en URL:", url);
       localStorage.removeItem("token");
       localStorage.removeItem("userRole");
       setAuth(null);
+
       window.location.href = "/login";
     }
 
