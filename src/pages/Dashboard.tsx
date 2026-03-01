@@ -58,17 +58,16 @@ export default function Dashboard() {
   const [online, setOnline] = useState<boolean>(navigator.onLine);
 
   // Leer rol desde localStorage (guardado en el login)
-const userRole =
-  (localStorage.getItem("userRole") as "ADMIN" | "USER") ?? "USER";
-  
+  const [userRole, setUserRole] = useState<"USER" | "ADMIN">(
+    () => (localStorage.getItem("userRole") as "ADMIN" | "USER") ?? "USER"
+  );
+
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function startHeartbeat() {
-    const send = () => {
+    heartbeatRef.current = setInterval(() => {
       if (navigator.onLine) api.post("/admin/heartbeat").catch(() => {});
-    };
-    send();
-    heartbeatRef.current = setInterval(send, 30_000);
+    }, 30_000);
   }
 
   function stopHeartbeat() {
