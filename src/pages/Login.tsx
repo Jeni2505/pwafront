@@ -15,13 +15,25 @@ export default function Login() {
     e.preventDefault();
     setError("");
     setLoading(true);
+
     try {
-      const { data } = await api.post("/auth/login", { email, password });
+      const { data } = await api.post("/auth/login", {
+        email,
+        password,
+      });
+
+      // 🔥 Guardar token
       localStorage.setItem("token", data.token);
-      // Guardar el rol para que Dashboard lo lea sin hacer otra petición
-      localStorage.setItem("userRole", data.user?.role ?? "USER");
+
+      // 🔥 Guardar role EXACTO que viene del backend
+      localStorage.setItem("userRole", data.user.role);
+
+      // 🔥 Configurar axios con el token
       setAuth(data.token);
+
+      // Redirigir
       nav("/dashboard");
+
     } catch (err: any) {
       setError(err?.response?.data?.message || "Error al iniciar sesión");
     } finally {
