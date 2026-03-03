@@ -33,11 +33,14 @@ api.interceptors.response.use(
     const status = error.response?.status;
     const url: string = error.config?.url ?? "";
 
-    const isAdminRoute   = url.includes("/admin");  // ← sin slash final
+    // 🔍 DEBUG TEMPORAL - borralo después
+    console.log("❌ Error interceptado:", { status, url, data: error.response?.data });
+
+    const isAdminRoute   = url.includes("/admin");
     const isProfileRoute = url.includes("/auth/profile");
 
-    // ✅ Solo cierra sesión si es 401 Y NO es ruta admin ni profile
     if (status === 401 && !isAdminRoute && !isProfileRoute) {
+      console.log("🚨 CERRANDO SESIÓN por:", url); // ← esto nos dirá QUIÉN lo causa
       localStorage.removeItem("token");
       localStorage.removeItem("userRole");
       setAuth(null);
