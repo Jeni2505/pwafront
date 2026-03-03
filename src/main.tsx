@@ -4,30 +4,36 @@ import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
+import AdminPanel from "./pages/AdminPanel";        // ← AGREGAR
 import ProtectedRoute from "./routes/ProtectedRoute";
-
 import "./index.css";
-
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <BrowserRouter>
-    <Routes>
-      {/*Publicas*/}
-      <Route path="/" element={<Login />} />
-      {<Route path="/register" element={<Register />} />}
+      <Routes>
+        {/* Públicas */}
+        <Route path="/" element={<Login />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
 
-      
-      {/*Privadas*/}
-      <Route path="/dashboard" element={
-         <ProtectedRoute>
-          <Dashboard />
-        </ProtectedRoute>
-      } />
-      
-      {/*Fallback*/}
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+        {/* Privadas */}
+        <Route path="/dashboard" element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        } />
+
+        {/* Admin */}
+        <Route path="/admin" element={           
+          <ProtectedRoute adminOnly>             {/* ← AGREGAR */}
+            <AdminPanel />
+          </ProtectedRoute>
+        } />
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </BrowserRouter>
   </React.StrictMode>
 );
