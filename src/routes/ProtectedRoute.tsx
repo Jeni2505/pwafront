@@ -10,6 +10,13 @@ export default function ProtectedRoute({ children, adminOnly = false }: Props) {
   const token    = localStorage.getItem("token");
   const role     = localStorage.getItem("userRole");
 
+   // 🔍 DEBUG TEMPORAL
+  console.log("ProtectedRoute - token:", token);
+  console.log("ProtectedRoute - role:", role);
+  console.log("ProtectedRoute - adminOnly:", adminOnly);
+  console.log("ProtectedRoute - ruta:", window.location.pathname);
+
+
   // Sin token → al login
   if (!token) return <Navigate to="/" replace />;
 

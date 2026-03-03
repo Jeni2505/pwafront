@@ -6,6 +6,11 @@ import AdminPanel from "./pages/AdminPanel";
 import ProtectedRoute from "./routes/ProtectedRoute";
 
 function App() {
+   // 🔍 DEBUG TEMPORAL
+  console.log("APP RENDER - token:", localStorage.getItem("token"));
+  console.log("APP RENDER - userRole:", localStorage.getItem("userRole"));
+  console.log("APP RENDER - ruta actual:", window.location.pathname);
+  
   return (
     <BrowserRouter>
       <Routes>
