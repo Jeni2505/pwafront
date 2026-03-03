@@ -2,227 +2,191 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 
-type UserItem = {
-  id: string;
+type UserRow = {
+  _id: string;
   name: string;
   email: string;
   role: "ADMIN" | "USER";
-  online: boolean;
   lastSeen: string | null;
   createdAt: string;
 };
 
+function isOnline(lastSeen: string | null): boolean {
+  if (!lastSeen) return false;
+  return Date.now() - new Date(lastSeen).getTime() < 2 * 60 * 1000;
+}
+
+function timeAgo(date: string | null): string {
+  if (!date) return "Nunca";
+  const diff = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
+  if (diff < 60)  return `hace ${diff}s`;
+  if (diff < 3600) return `hace ${Math.floor(diff / 60)}min`;
+  return `hace ${Math.floor(diff / 3600)}h`;
+}
+
 export default function AdminPanel() {
   const nav = useNavigate();
-  const [users, setUsers] = useState<UserItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [users, setUsers]         = useState<UserRow[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState("");
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
   const fetchUsers = useCallback(async () => {
     try {
       const { data } = await api.get("/admin/users");
       setUsers(data.users);
-      setLastRefresh(new Date());
+      setLastUpdate(new Date());
       setError("");
-    } catch (err: any) {
-      if (err?.response?.status === 403) {
-        setError("Acceso denegado. No tienes permisos de administrador.");
-      } else {
-        setError("Error al cargar usuarios.");
-      }
+    } catch (e: any) {
+      setError(e?.response?.data?.message || "Error al cargar usuarios");
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Carga inicial + polling cada 30 segundos
   useEffect(() => {
     fetchUsers();
-    // Refresca la lista cada 30 segundos para ver quién está online
-    const interval = setInterval(fetchUsers, 30_000);
-    return () => clearInterval(interval);
+    const id = setInterval(fetchUsers, 30_000);
+    return () => clearInterval(id);
   }, [fetchUsers]);
 
-  const onlineCount = users.filter((u) => u.online).length;
-  const totalCount = users.length;
-
-  function formatLastSeen(lastSeen: string | null) {
-    if (!lastSeen) return "Nunca";
-    const diff = Date.now() - new Date(lastSeen).getTime();
-    if (diff < 60_000) return "Hace menos de 1 min";
-    if (diff < 3600_000) return `Hace ${Math.floor(diff / 60_000)} min`;
-    return new Date(lastSeen).toLocaleString("es-MX");
-  }
+  const onlineUsers  = users.filter(u => isOnline(u.lastSeen));
+  const offlineUsers = users.filter(u => !isOnline(u.lastSeen));
 
   return (
     <div className="wrap">
-      {/* Header */}
       <header className="topbar">
-        <h1>Panel de Administración</h1>
+        <h1>👥 Panel de Administración</h1>
         <div className="spacer" />
-        <div className="stats">
-          <span>Total: {totalCount}</span>
-          <span style={{ color: "#4ade80" }}>🟢 Online: {onlineCount}</span>
-          <span style={{ color: "#f87171" }}>🔴 Offline: {totalCount - onlineCount}</span>
-        </div>
-        <button
-          className="btn"
-          style={{ background: "#374151", marginRight: 8 }}
-          onClick={() => nav("/dashboard")}
-        >
+        {lastUpdate && (
+          <span className="muted" style={{ fontSize: 12, marginRight: 12 }}>
+            Actualizado: {lastUpdate.toLocaleTimeString()}
+          </span>
+        )}
+        <button className="btn" onClick={fetchUsers}>🔄 Actualizar</button>
+        <button className="btn" style={{ marginLeft: 8 }} onClick={() => nav("/dashboard")}>
           ← Dashboard
         </button>
       </header>
 
       <main>
-        {/* Info de último refresco */}
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 16,
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: "1.1rem", color: "#9ca3af" }}>
-            Usuarios registrados
-          </h2>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: "0.8rem", color: "#6b7280" }}>
-              Actualizado: {lastRefresh.toLocaleTimeString("es-MX")}
-            </span>
-            <button
-              className="btn"
-              style={{ padding: "6px 14px", fontSize: "0.85rem" }}
-              onClick={fetchUsers}
-            >
-              🔄 Actualizar
-            </button>
-          </div>
+        {error && <div className="alert">{error}</div>}
+
+        {/* ── Tarjetas de resumen ── */}
+        <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
+          <StatCard label="Total usuarios" value={users.length} color="#1f6feb" />
+          <StatCard label="En línea ahora" value={onlineUsers.length} color="#16a34a" />
+          <StatCard label="Fuera de línea"  value={offlineUsers.length} color="#6b7280" />
+          <StatCard label="Admins" value={users.filter(u => u.role === "ADMIN").length} color="#9333ea" />
         </div>
 
-        {/* Error */}
-        {error && (
-          <div
-            style={{
-              background: "#7f1d1d",
-              color: "#fca5a5",
-              padding: "12px 16px",
-              borderRadius: 8,
-              marginBottom: 16,
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        {/* Loading */}
         {loading ? (
-          <p style={{ color: "#9ca3af" }}>Cargando usuarios…</p>
-        ) : users.length === 0 ? (
-          <p style={{ color: "#9ca3af" }}>No hay usuarios registrados.</p>
+          <p>Cargando usuarios…</p>
         ) : (
-          <div className="list" style={{ gap: 10 }}>
-            {users.map((u) => (
-              <div
-                key={u.id}
-                className="item"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  padding: "14px 16px",
-                  borderLeft: `4px solid ${u.online ? "#4ade80" : "#374151"}`,
-                }}
-              >
-                {/* Avatar inicial */}
-                <div
-                  style={{
-                    width: 42,
-                    height: 42,
-                    borderRadius: "50%",
-                    background: u.role === "ADMIN" ? "#1d4ed8" : "#374151",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontWeight: 700,
-                    fontSize: "1.1rem",
-                    flexShrink: 0,
-                  }}
-                >
-                  {u.name.charAt(0).toUpperCase()}
-                </div>
+          <>
+            {/* ── Usuarios en línea ── */}
+            <section style={{ marginBottom: 32 }}>
+              <h2 style={{ marginBottom: 12 }}>
+                🟢 En línea ({onlineUsers.length})
+              </h2>
+              {onlineUsers.length === 0 ? (
+                <p className="empty">Ningún usuario en línea ahora mismo</p>
+              ) : (
+                <UserTable users={onlineUsers} />
+              )}
+            </section>
 
-                {/* Info */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontWeight: 600, fontSize: "0.95rem" }}>{u.name}</span>
-                    {u.role === "ADMIN" && (
-                      <span
-                        style={{
-                          background: "#1d4ed8",
-                          color: "#bfdbfe",
-                          fontSize: "0.7rem",
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          fontWeight: 700,
-                          letterSpacing: "0.05em",
-                        }}
-                      >
-                        ADMIN
-                      </span>
-                    )}
-                  </div>
-                  <p
-                    style={{
-                      margin: "2px 0 0",
-                      fontSize: "0.82rem",
-                      color: "#9ca3af",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {u.email}
-                  </p>
-                  <p style={{ margin: "3px 0 0", fontSize: "0.78rem", color: "#6b7280" }}>
-                    Última actividad: {formatLastSeen(u.lastSeen)}
-                  </p>
-                </div>
-
-                {/* Estado online */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-end",
-                    gap: 4,
-                    flexShrink: 0,
-                  }}
-                >
-                  <span
-                    className="badge"
-                    style={{
-                      background: u.online ? "#14532d" : "#1f2937",
-                      color: u.online ? "#4ade80" : "#9ca3af",
-                      border: `1px solid ${u.online ? "#16a34a" : "#374151"}`,
-                      padding: "3px 12px",
-                      borderRadius: 999,
-                      fontSize: "0.8rem",
-                      fontWeight: 600,
-                    }}
-                  >
-                    {u.online ? "🟢 Online" : "⚫ Offline"}
-                  </span>
-                  <span style={{ fontSize: "0.72rem", color: "#4b5563" }}>
-                    Registrado: {new Date(u.createdAt).toLocaleDateString("es-MX")}
-                  </span>
-                </div>
-              </div>
-            ))}
-          </div>
+            {/* ── Todos los usuarios ── */}
+            <section>
+              <h2 style={{ marginBottom: 12 }}>
+                👤 Todos los usuarios ({users.length})
+              </h2>
+              <UserTable users={users} showAll />
+            </section>
+          </>
         )}
       </main>
     </div>
   );
 }
+
+/* ── Subcomponentes ── */
+
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+  return (
+    <div style={{
+      background: "var(--surface, #1e1e2e)",
+      border: `1px solid ${color}44`,
+      borderRadius: 12,
+      padding: "16px 24px",
+      minWidth: 130,
+      textAlign: "center",
+    }}>
+      <div style={{ fontSize: 28, fontWeight: 700, color }}>{value}</div>
+      <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 4 }}>{label}</div>
+    </div>
+  );
+}
+
+function UserTable({ users, showAll = false }: { users: UserRow[]; showAll?: boolean }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid #333" }}>
+            <th style={th}>Estado</th>
+            <th style={th}>Nombre</th>
+            <th style={th}>Email</th>
+            <th style={th}>Rol</th>
+            {showAll && <th style={th}>Último acceso</th>}
+            {showAll && <th style={th}>Registrado</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {users.map(u => (
+            <tr key={u._id} style={{ borderBottom: "1px solid #222" }}>
+              <td style={td}>
+                <span style={{
+                  display: "inline-block",
+                  width: 10, height: 10,
+                  borderRadius: "50%",
+                  background: isOnline(u.lastSeen) ? "#16a34a" : "#4b5563",
+                  marginRight: 6,
+                }} />
+                {isOnline(u.lastSeen) ? "Online" : "Offline"}
+              </td>
+              <td style={td}>{u.name}</td>
+              <td style={td}>{u.email}</td>
+              <td style={td}>
+                <span style={{
+                  padding: "2px 10px",
+                  borderRadius: 99,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  background: u.role === "ADMIN" ? "#7c3aed22" : "#1f6feb22",
+                  color:      u.role === "ADMIN" ? "#a78bfa"   : "#60a5fa",
+                  border: `1px solid ${u.role === "ADMIN" ? "#7c3aed" : "#1f6feb"}`,
+                }}>
+                  {u.role}
+                </span>
+              </td>
+              {showAll && <td style={td}>{timeAgo(u.lastSeen)}</td>}
+              {showAll && <td style={{ ...td, color: "#6b7280" }}>
+                {new Date(u.createdAt).toLocaleDateString()}
+              </td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const th: React.CSSProperties = {
+  textAlign: "left", padding: "8px 12px",
+  color: "#9ca3af", fontWeight: 600,
+};
+const td: React.CSSProperties = {
+  padding: "10px 12px",
+};

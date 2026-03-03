@@ -57,17 +57,19 @@ export default function Dashboard() {
   const [editingDescription, setEditingDescription] = useState("");
   const [online, setOnline] = useState<boolean>(navigator.onLine);
 
-  // Leer rol desde localStorage (guardado en el login)
-  const [userRole, setUserRole] = useState<"USER" | "ADMIN">(
+  const [userRole] = useState<"USER" | "ADMIN">(
     () => (localStorage.getItem("userRole") as "ADMIN" | "USER") ?? "USER"
   );
 
   const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function startHeartbeat() {
-    heartbeatRef.current = setInterval(() => {
+    // ✅ FIX: llamada inmediata al arrancar + cada 30s
+    const ping = () => {
       if (navigator.onLine) api.post("/admin/heartbeat").catch(() => {});
-    }, 30_000);
+    };
+    ping(); // primer ping inmediato
+    heartbeatRef.current = setInterval(ping, 30_000);
   }
 
   function stopHeartbeat() {
@@ -109,7 +111,10 @@ export default function Dashboard() {
     try {
       const { data } = await api.get("/tasks");
       const raw = Array.isArray(data?.items) ? data.items : [];
-      const list = raw.map(normalizeTask);
+      // ✅ FIX: filtrar items sin _id antes de guardar en IndexedDB
+      const list = raw
+        .map(normalizeTask)
+        .filter((t: Task) => t._id && t._id !== "undefined");
       setTasks(list);
       await cacheTasks(list);
     } catch {
@@ -140,18 +145,39 @@ export default function Dashboard() {
     setDescription("");
 
     if (!navigator.onLine) {
-      const op: OutboxOp = { id: "op-" + clienteId, op: "create", clienteId, data: localTask, ts: Date.now() };
+      const op: OutboxOp = {
+        id: "op-" + clienteId,
+        op: "create",
+        clienteId,
+        data: localTask,
+        ts: Date.now(),
+      };
       await queue(op);
       return;
     }
 
     try {
       const { data } = await api.post("/tasks", { title: t, description: d });
-      const created = normalizeTask(data?.task ?? data);
-      setTasks((prev) => prev.map((x) => (x._id === clienteId ? created : x)));
+      const raw = data?.task ?? data;
+
+      // ✅ FIX: validar que la respuesta tenga _id antes de normalizar
+      if (!raw?._id && !raw?.id) throw new Error("Respuesta sin _id");
+
+      const created = normalizeTask(raw);
+      setTasks((prev) =>
+        prev.map((x) => (x._id === clienteId ? created : x))
+      );
+      // ✅ FIX: reemplazar la tarea local UUID por la del servidor
+      await removeTaskLocal(clienteId);
       await putTaskLocal(created);
     } catch {
-      const op: OutboxOp = { id: "op-" + clienteId, op: "create", clienteId, data: localTask, ts: Date.now() };
+      const op: OutboxOp = {
+        id: "op-" + clienteId,
+        op: "create",
+        clienteId,
+        data: localTask,
+        ts: Date.now(),
+      };
       await queue(op);
     }
   }
@@ -175,14 +201,27 @@ export default function Dashboard() {
     setEditingId(null);
 
     if (!navigator.onLine) {
-      await queue({ id: "upd-" + taskId, op: "update", clienteId: isLocalId(taskId) ? taskId : undefined, serverId: isLocalId(taskId) ? undefined : taskId, data: { title: newTitle, description: newDesc }, ts: Date.now() } as OutboxOp);
+      await queue({
+        id: "upd-" + taskId,
+        op: "update",
+        clienteId: isLocalId(taskId) ? taskId : undefined,
+        serverId: isLocalId(taskId) ? undefined : taskId,
+        data: { title: newTitle, description: newDesc },
+        ts: Date.now(),
+      } as OutboxOp);
       return;
     }
 
     try {
       await api.put(`/tasks/${taskId}`, { title: newTitle, description: newDesc });
     } catch {
-      await queue({ id: "upd-" + taskId, op: "update", serverId: taskId, data: { title: newTitle, description: newDesc }, ts: Date.now() } as OutboxOp);
+      await queue({
+        id: "upd-" + taskId,
+        op: "update",
+        serverId: taskId,
+        data: { title: newTitle, description: newDesc },
+        ts: Date.now(),
+      } as OutboxOp);
     }
   }
 
@@ -192,14 +231,27 @@ export default function Dashboard() {
     await putTaskLocal(updated);
 
     if (!navigator.onLine) {
-      await queue({ id: "upd-" + task._id, op: "update", serverId: isLocalId(task._id) ? undefined : task._id, clienteId: isLocalId(task._id) ? task._id : undefined, data: { status: newStatus }, ts: Date.now() });
+      await queue({
+        id: "upd-" + task._id,
+        op: "update",
+        serverId: isLocalId(task._id) ? undefined : task._id,
+        clienteId: isLocalId(task._id) ? task._id : undefined,
+        data: { status: newStatus },
+        ts: Date.now(),
+      });
       return;
     }
 
     try {
       await api.put(`/tasks/${task._id}`, { status: newStatus });
     } catch {
-      await queue({ id: "upd-" + task._id, op: "update", serverId: task._id, data: { status: newStatus }, ts: Date.now() });
+      await queue({
+        id: "upd-" + task._id,
+        op: "update",
+        serverId: task._id,
+        data: { status: newStatus },
+        ts: Date.now(),
+      });
     }
   }
 
@@ -208,8 +260,24 @@ export default function Dashboard() {
     setTasks((prev) => prev.filter((t) => t._id !== taskId));
     await removeTaskLocal(taskId);
 
+    // ✅ FIX: si es ID local (UUID), no intentar borrarlo en el servidor
+    if (isLocalId(taskId)) {
+      await queue({
+        id: "del-" + taskId,
+        op: "delete",
+        clienteId: taskId,
+        ts: Date.now(),
+      });
+      return;
+    }
+
     if (!navigator.onLine) {
-      await queue({ id: "del-" + taskId, op: "delete", serverId: isLocalId(taskId) ? undefined : taskId, clienteId: isLocalId(taskId) ? taskId : undefined, ts: Date.now() });
+      await queue({
+        id: "del-" + taskId,
+        op: "delete",
+        serverId: taskId,
+        ts: Date.now(),
+      });
       return;
     }
 
@@ -218,7 +286,12 @@ export default function Dashboard() {
     } catch {
       setTasks(backup);
       for (const t of backup) await putTaskLocal(t);
-      await queue({ id: "del-" + taskId, op: "delete", serverId: taskId, clienteId: isLocalId(taskId) ? taskId : undefined, ts: Date.now() });
+      await queue({
+        id: "del-" + taskId,
+        op: "delete",
+        serverId: taskId,
+        ts: Date.now(),
+      });
     }
   }
 
@@ -234,7 +307,11 @@ export default function Dashboard() {
     let list = tasks;
     if (search.trim()) {
       const s = search.toLowerCase();
-      list = list.filter((t) => (t.title || "").toLowerCase().includes(s) || (t.description || "").toLowerCase().includes(s));
+      list = list.filter(
+        (t) =>
+          (t.title || "").toLowerCase().includes(s) ||
+          (t.description || "").toLowerCase().includes(s)
+      );
     }
     if (filter === "active") list = list.filter((t) => t.status !== "Completada");
     if (filter === "completed") list = list.filter((t) => t.status === "Completada");
@@ -256,7 +333,13 @@ export default function Dashboard() {
           <span>Total: {stats.total}</span>
           <span>Hechas: {stats.done}</span>
           <span>Pendientes: {stats.pending}</span>
-          <span className="badge" style={{ marginLeft: 8, background: online ? "#1f6feb" : "#b45309" }}>
+          <span
+            className="badge"
+            style={{
+              marginLeft: 8,
+              background: online ? "#1f6feb" : "#b45309",
+            }}
+          >
             {online ? "Online" : "Offline"}
           </span>
         </div>
@@ -264,29 +347,69 @@ export default function Dashboard() {
         {userRole === "ADMIN" && (
           <button
             className="btn"
-            style={{ background: "#1d4ed8", marginRight: 8, display: "flex", alignItems: "center", gap: 6 }}
+            style={{
+              background: "#1d4ed8",
+              marginRight: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
             onClick={() => nav("/admin")}
           >
             👥 Admin
           </button>
         )}
 
-        <button className="btn danger" onClick={logout}>Salir</button>
+        <button className="btn danger" onClick={logout}>
+          Salir
+        </button>
       </header>
 
       <main>
         <form className="add add-grid" onSubmit={addTask}>
-          <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título de la tarea…" />
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Descripción (opcional)…" rows={2} />
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Título de la tarea…"
+          />
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Descripción (opcional)…"
+            rows={2}
+          />
           <button className="btn">Agregar</button>
         </form>
 
         <div className="toolbar">
-          <input className="search" placeholder="Buscar por título o descripción…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            className="search"
+            placeholder="Buscar por título o descripción…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
           <div className="filters">
-            <button className={filter === "all" ? "chip active" : "chip"} onClick={() => setFilter("all")} type="button">Todas</button>
-            <button className={filter === "active" ? "chip active" : "chip"} onClick={() => setFilter("active")} type="button">Activas</button>
-            <button className={filter === "completed" ? "chip active" : "chip"} onClick={() => setFilter("completed")} type="button">Hechas</button>
+            <button
+              className={filter === "all" ? "chip active" : "chip"}
+              onClick={() => setFilter("all")}
+              type="button"
+            >
+              Todas
+            </button>
+            <button
+              className={filter === "active" ? "chip active" : "chip"}
+              onClick={() => setFilter("active")}
+              type="button"
+            >
+              Activas
+            </button>
+            <button
+              className={filter === "completed" ? "chip active" : "chip"}
+              onClick={() => setFilter("completed")}
+              type="button"
+            >
+              Hechas
+            </button>
           </div>
         </div>
 
@@ -297,8 +420,18 @@ export default function Dashboard() {
         ) : (
           <ul className="list">
             {filtered.map((t) => (
-              <li key={t._id} className={t.status === "Completada" ? "item done" : "item"}>
-                <select value={t.status} onChange={(e) => handleStatusChange(t, e.target.value as Status)} className="status-select" title="Estado">
+              <li
+                key={t._id}
+                className={t.status === "Completada" ? "item done" : "item"}
+              >
+                <select
+                  value={t.status}
+                  onChange={(e) =>
+                    handleStatusChange(t, e.target.value as Status)
+                  }
+                  className="status-select"
+                  title="Estado"
+                >
                   <option value="Pendiente">Pendiente</option>
                   <option value="En Progreso">En Progreso</option>
                   <option value="Completada">Completada</option>
@@ -307,15 +440,43 @@ export default function Dashboard() {
                 <div className="content">
                   {editingId === t._id ? (
                     <>
-                      <input className="edit" value={editingTitle} onChange={(e) => setEditingTitle(e.target.value)} placeholder="Título" autoFocus />
-                      <textarea className="edit" value={editingDescription} onChange={(e) => setEditingDescription(e.target.value)} placeholder="Descripción" rows={2} />
+                      <input
+                        className="edit"
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        placeholder="Título"
+                        autoFocus
+                      />
+                      <textarea
+                        className="edit"
+                        value={editingDescription}
+                        onChange={(e) => setEditingDescription(e.target.value)}
+                        placeholder="Descripción"
+                        rows={2}
+                      />
                     </>
                   ) : (
                     <>
-                      <span className="title" onDoubleClick={() => startEdit(t)}>{t.title}</span>
-                      {t.description && <p className="desc">{t.description}</p>}
+                      <span
+                        className="title"
+                        onDoubleClick={() => startEdit(t)}
+                      >
+                        {t.title}
+                      </span>
+                      {t.description && (
+                        <p className="desc">{t.description}</p>
+                      )}
                       {(t.pending || isLocalId(t._id)) && (
-                        <span className="badge" title="Aún no sincronizada" style={{ background: "#b45309", width: "fit-content" }}>Falta sincronizar</span>
+                        <span
+                          className="badge"
+                          title="Aún no sincronizada"
+                          style={{
+                            background: "#b45309",
+                            width: "fit-content",
+                          }}
+                        >
+                          Falta sincronizar
+                        </span>
                       )}
                     </>
                   )}
@@ -323,11 +484,25 @@ export default function Dashboard() {
 
                 <div className="actions">
                   {editingId === t._id ? (
-                    <button className="btn" onClick={() => saveEdit(t._id)}>Guardar</button>
+                    <button className="btn" onClick={() => saveEdit(t._id)}>
+                      Guardar
+                    </button>
                   ) : (
-                    <button className="icon" title="Editar" onClick={() => startEdit(t)}>✏️</button>
+                    <button
+                      className="icon"
+                      title="Editar"
+                      onClick={() => startEdit(t)}
+                    >
+                      ✏️
+                    </button>
                   )}
-                  <button className="icon danger" title="Eliminar" onClick={() => removeTask(t._id)}>🗑️</button>
+                  <button
+                    className="icon danger"
+                    title="Eliminar"
+                    onClick={() => removeTask(t._id)}
+                  >
+                    🗑️
+                  </button>
                 </div>
               </li>
             ))}

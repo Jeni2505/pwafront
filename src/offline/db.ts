@@ -20,14 +20,19 @@ export function db() {
   return dbp;
 }
 
-export async function cacheTasks(list:any[]) {
+export async function cacheTasks(list: any[]) {
   const tx = (await db()).transaction("tasks", "readwrite");
   const s = tx.objectStore("tasks");
   await s.clear();
-  for (const t of list) await s.put(t);
+  for (const t of list) {
+    if (t?._id) await s.put(t);  // ← solo guarda si tiene _id
+  }
   await tx.done;
 }
-export async function putTaskLocal(task:any){ await (await db()).put("tasks", task); }
+export async function putTaskLocal(task:any){
+  if (!task?._id) return; // ← evita guardar tareas sin _id
+  await (await db()).put("tasks", task);
+}
 export async function getAllTasksLocal(){ return (await (await db()).getAll("tasks")) || []; }
 export async function removeTaskLocal(id:string){ await (await db()).delete("tasks", id); }
 

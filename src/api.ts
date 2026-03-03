@@ -26,21 +26,21 @@ if (token) {
 /**
  * Interceptor global para manejar errores 401
  */
+// REEMPLAZA el interceptor completo por este:
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status;
     const url: string = error.config?.url ?? "";
 
-    const isAdminRoute = url.includes("/admin/");
+    const isAdminRoute   = url.includes("/admin");  // ← sin slash final
     const isProfileRoute = url.includes("/auth/profile");
 
-    // 🔥 Si es 401 y NO es ruta admin ni profile → cerrar sesión
+    // ✅ Solo cierra sesión si es 401 Y NO es ruta admin ni profile
     if (status === 401 && !isAdminRoute && !isProfileRoute) {
       localStorage.removeItem("token");
       localStorage.removeItem("userRole");
       setAuth(null);
-
       window.location.href = "/login";
     }
 

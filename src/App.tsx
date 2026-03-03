@@ -26,12 +26,12 @@ function App() {
 
         {/* Ruta protegida de admin — el componente mismo verifica el rol */}
         <Route
-          path="/admin"
-          element={
-            <ProtectedRoute>
-              <AdminPanel />
-            </ProtectedRoute>
-          }
+        path="/admin"
+        element={
+        <ProtectedRoute adminOnly>   {/* ← agrega adminOnly */}
+        <AdminPanel />
+        </ProtectedRoute>
+        }
         />
 
         {/* Fallback */}
